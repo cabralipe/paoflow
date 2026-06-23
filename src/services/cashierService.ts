@@ -2,6 +2,18 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { CashSession } from '../types';
 import { authService } from './authService';
 
+const SESSION_SELECT = `
+  *,
+  opener:profiles!cash_sessions_opened_by_fkey(name),
+  closer:profiles!cash_sessions_closed_by_fkey(name)
+`;
+
+const normalizeSession = (session: any): CashSession => ({
+  ...session,
+  opened_by_name: session.opener?.name || 'Desconhecido',
+  closed_by_name: session.closer?.name || null,
+});
+
 const ensureBakeryId = () => {
   if (!isSupabaseConfigured) {
     throw new Error('Supabase nao configurado.');
@@ -13,21 +25,25 @@ const ensureBakeryId = () => {
   return user.bakery_id;
 };
 
+const getBakeryIdOrNull = () => {
+  const user = authService.getCurrentUser();
+  if (!isSupabaseConfigured || !user?.bakery_id) {
+    return null;
+  }
+  return user.bakery_id;
+};
+
 export const cashierService = {
   getCurrentSession: async (): Promise<CashSession | null> => {
-    const user = authService.getCurrentUser();
-    if (!isSupabaseConfigured || !user?.bakery_id) {
+    const bakeryId = getBakeryIdOrNull();
+    if (!bakeryId) {
       return null;
     }
 
     const { data, error } = await supabase
       .from('cash_sessions')
-      .select(`
-        *,
-        opener:profiles!cash_sessions_opened_by_fkey(name),
-        closer:profiles!cash_sessions_closed_by_fkey(name)
-      `)
-      .eq('bakery_id', user.bakery_id)
+      .select(SESSION_SELECT)
+      .eq('bakery_id', bakeryId)
       .eq('status', 'open')
       .limit(1);
 
@@ -40,12 +56,42 @@ export const cashierService = {
       return null;
     }
 
-    const session = data[0];
-    return {
-      ...session,
-      opened_by_name: session.opener?.name || 'Desconhecido',
-      closed_by_name: session.closer?.name || null,
-    };
+    return normalizeSession(data[0]);
+  },
+
+  getSessionById: async (sessionId: string): Promise<CashSession | null> => {
+    const bakeryId = getBakeryIdOrNull();
+    if (!bakeryId) return null;
+
+    const { data, error } = await supabase
+      .from('cash_sessions')
+      .select(SESSION_SELECT)
+      .eq('bakery_id', bakeryId)
+      .eq('id', sessionId)
+      .limit(1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) return null;
+
+    return normalizeSession(data[0]);
+  },
+
+  getLastClosedSession: async (): Promise<CashSession | null> => {
+    const bakeryId = getBakeryIdOrNull();
+    if (!bakeryId) return null;
+
+    const { data, error } = await supabase
+      .from('cash_sessions')
+      .select(SESSION_SELECT)
+      .eq('bakery_id', bakeryId)
+      .eq('status', 'closed')
+      .order('closed_at', { ascending: false, nullsFirst: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) return null;
+
+    return normalizeSession(data[0]);
   },
 
   openSession: async (userId: string, quantity: number, notes?: string): Promise<CashSession> => {
@@ -107,6 +153,7 @@ export const cashierService = {
       .single();
 
     if (error) throw error;
-    return data;
+    const closedSession = await cashierService.getSessionById(data.id);
+    return closedSession || data;
   },
 };

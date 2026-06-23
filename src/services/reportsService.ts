@@ -5,7 +5,7 @@ import { cashierService } from './cashierService';
 export const reportsService = {
   getDailySummary: async (sessionId: string): Promise<DailySummary> => {
     const sales = await salesService.getSalesBySession(sessionId);
-    const session = await cashierService.getCurrentSession();
+    const session = await cashierService.getSessionById(sessionId);
     const openingQuantity = session ? session.opening_bread_quantity : 0;
     const closingQuantity = session ? session.closing_bread_quantity || null : null;
 

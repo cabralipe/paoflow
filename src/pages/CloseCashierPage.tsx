@@ -1,29 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import Header from '../components/Header';
-import BigButton from '../components/BigButton';
 import CustomDailySummary from '../components/DailySummary';
 import { useCurrentCashSession } from '../hooks/useCurrentCashSession';
 import { useDailySummary } from '../hooks/useDailySummary';
 import { authService } from '../services/authService';
 import { cashierService } from '../services/cashierService';
-import { formatCurrency } from '../utils/currency';
 import { formatFullDateTime } from '../utils/dates';
-import { Profile } from '../types';
-import { Lock, FileSpreadsheet, Percent, Info, ClipboardCopy, ArrowRightLeft, ShieldAlert, AlertCircle } from 'lucide-react';
+import { CashSession, Profile } from '../types';
+import {
+  AlertCircle,
+  ArrowRightLeft,
+  CheckCircle2,
+  ClipboardCopy,
+  FileSpreadsheet,
+  Info,
+  Lock,
+  ShieldAlert,
+} from 'lucide-react';
 
 export default function CloseCashierPage() {
   const navigate = useNavigate();
-  const [user, setUser] = useState<Profile | null>(authService.getCurrentUser());
+  const [user] = useState<Profile | null>(authService.getCurrentUser());
   const { currentSession, loading: loadingSession, refetch: refetchSession } = useCurrentCashSession();
-  const { summary, loading: loadingSummary } = useDailySummary(currentSession?.id);
+  const [lastClosedSession, setLastClosedSession] = useState<CashSession | null>(null);
+  const [loadingClosedSession, setLoadingClosedSession] = useState<boolean>(false);
 
-  // Estados locais : Quantidade física contada e observações
+  const displaySession = currentSession || lastClosedSession;
+  const isClosedSessionView = !currentSession && !!lastClosedSession;
+  const { summary, loading: loadingSummary } = useDailySummary(displaySession?.id);
+
   const [actualBreadsCount, setActualBreadsCount] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
-
-  // Estados de feedback
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -31,9 +40,37 @@ export default function CloseCashierPage() {
   useEffect(() => {
     if (!user) {
       navigate('/login');
-      return;
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    let active = true;
+
+    const fetchLastClosedSession = async () => {
+      if (loadingSession) return;
+
+      if (currentSession) {
+        setLastClosedSession(null);
+        return;
+      }
+
+      try {
+        setLoadingClosedSession(true);
+        const session = await cashierService.getLastClosedSession();
+        if (active) setLastClosedSession(session);
+      } catch (err) {
+        console.error('Erro ao buscar ultimo caixa fechado:', err);
+      } finally {
+        if (active) setLoadingClosedSession(false);
+      }
+    };
+
+    fetchLastClosedSession();
+
+    return () => {
+      active = false;
+    };
+  }, [currentSession?.id, loadingSession]);
 
   const handleCloseCashier = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,21 +79,22 @@ export default function CloseCashierPage() {
 
     if (!user) return;
     if (!currentSession) {
-      setErrorMsg('Não há sessão de caixa aberta no momento.');
+      setErrorMsg('Nao ha sessao de caixa aberta no momento.');
       return;
     }
 
     const physicalCount = parseInt(actualBreadsCount, 10);
     if (isNaN(physicalCount) || physicalCount < 0) {
-      setErrorMsg('Por favor, informe a quantidade real física contada de pães restantes no mostrador (digite 0 se não sobrar nenhum).');
+      setErrorMsg('Informe a quantidade fisica contada de paes restantes no balcao. Use 0 se nao sobrou nenhum.');
       return;
     }
 
     try {
       setSubmitting(true);
-      await cashierService.closeSession(user.id, physicalCount, notes);
+      const closedSession = await cashierService.closeSession(user.id, physicalCount, notes);
+      setLastClosedSession(closedSession);
       await refetchSession();
-      setSuccessMsg(`Caixa FECHADO com sucesso! Todas as vendas foram salvas e consolidadas no histórico.`);
+      setSuccessMsg('Caixa fechado com sucesso. O balanco consolidado esta disponivel abaixo.');
       setActualBreadsCount('');
       setNotes('');
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -68,35 +106,44 @@ export default function CloseCashierPage() {
     }
   };
 
-  // Cálculos de diferença de inventário (Estoque Esperado vs Estoque Real Contado)
   const remainingEstimated = summary ? summary.quantity_remaining_estimated : 0;
   const parsedActual = actualBreadsCount !== '' ? parseInt(actualBreadsCount, 10) : null;
-  const inventoryDiff = parsedActual !== null && !isNaN(parsedActual) ? parsedActual - remainingEstimated : null;
+  const countedBreads = isClosedSessionView ? displaySession?.closing_bread_quantity ?? null : parsedActual;
+  const inventoryDiff = countedBreads !== null && !isNaN(countedBreads) ? countedBreads - remainingEstimated : null;
+
+  const inventoryDiffLabel = () => {
+    if (inventoryDiff === null) return null;
+    if (inventoryDiff === 0) return 'Carga exata. Sem sobras.';
+    if (inventoryDiff > 0) return `Sobras de +${inventoryDiff} paes`;
+    return `Quebra de ${inventoryDiff} paes`;
+  };
 
   return (
     <Layout>
       <div className="flex flex-col gap-5" id="pao-close-cashier-view">
-        <Header 
-          title="Balanço & Fechamento de Caixa" 
-          subtitle="Realize a conferência física do balcão de pães e feche o balanço de vendas diárias."
-          session={currentSession}
-          loadingSession={loadingSession}
+        <Header
+          title="Balanco & Fechamento de Caixa"
+          subtitle={
+            isClosedSessionView
+              ? 'Consulte o ultimo caixa fechado com o balanco consolidado da operacao.'
+              : 'Realize a conferencia fisica do balcao de paes e feche o balanco de vendas diarias.'
+          }
+          session={displaySession}
+          loadingSession={loadingSession || loadingClosedSession}
         />
 
-        {/* Verificação de Permissão do Caixa */}
         {user && user.role === 'attendant' && (
           <div className="bg-rose-500/10 border-4 border-brand-dark p-5 text-sm font-black text-rose-900 flex flex-col gap-2 shadow-[4px_4px_0px_rgba(26,26,26,1)]" id="attendant-close-forbidden">
             <div className="flex items-center gap-2 text-rose-950 uppercase tracking-wide">
               <ShieldAlert className="w-5 h-5 text-rose-600 stroke-[2.5]" />
-              <span>Acesso Restrito: Perfil Atendente de Balcão</span>
+              <span>Acesso Restrito: Perfil Atendente de Balcao</span>
             </div>
             <p className="text-slate-700 font-bold text-xs leading-relaxed uppercase tracking-wide">
-              Você não possui autorização para fechar o caixa ou realizar a alteração de inventário. Essa tela serve apenas para auditar as vendas efetuadas no dia corrente.
+              Voce nao possui autorizacao para fechar o caixa ou alterar inventario. Essa tela serve apenas para auditar as vendas efetuadas.
             </p>
           </div>
         )}
 
-        {/* Toasts */}
         {successMsg && (
           <div className="bg-emerald-500 text-white border-4 border-brand-dark p-4 font-black text-xs uppercase tracking-wider shadow-[4px_4px_0px_rgba(26,26,26,1)]" id="close-success">
             {successMsg}
@@ -110,136 +157,191 @@ export default function CloseCashierPage() {
           </div>
         )}
 
-        {/* Seção Principal */}
-        {!currentSession ? (
+        {!displaySession ? (
           <div className="bg-white border-4 border-dashed border-brand-dark p-10 text-center flex flex-col items-center gap-4 shadow-[5px_5px_0px_rgba(26,26,26,1)]">
             <ClipboardCopy className="text-brand-orange w-12 h-12 stroke-[2.5]" />
             <div>
-              <h3 className="text-base font-black text-brand-dark uppercase">Não há caixa aberto atualmente</h3>
+              <h3 className="text-base font-black text-brand-dark uppercase">Nao ha caixa aberto atualmente</h3>
               <p className="text-slate-500 text-xs mt-2 leading-relaxed uppercase tracking-wider font-bold max-w-sm">
-                O caixa diário está encerrado. Peça para o gerente ou supervisor administrativo iniciar o dia informando a nova carga inicial sob a tela de ajustes.
+                Nenhum fechamento anterior foi encontrado para esta padaria. Abra um caixa em ajustes para iniciar uma nova operacao.
               </p>
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            
-            {/* Lado Esquerdo - Relatório Consolidado (Col 7) */}
             <div className="lg:col-span-7 flex flex-col gap-6">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4 text-brand-orange stroke-[2.5]" />
-                <h2 className="text-base font-black text-brand-dark tracking-tight uppercase">Balanço Consolidado Diário</h2>
+                <h2 className="text-base font-black text-brand-dark tracking-tight uppercase">
+                  {isClosedSessionView ? 'Balanco do Ultimo Caixa Fechado' : 'Balanco Consolidado Diario'}
+                </h2>
               </div>
 
-              {/* Bento Dashboard statistics card */}
               <CustomDailySummary summary={summary} loading={loadingSummary} />
 
-              {/* Metadados da sessão aberta */}
+              {isClosedSessionView && (
+                <div className="bg-emerald-500 text-white border-4 border-brand-dark p-4 sm:p-5 flex flex-col gap-3 shadow-[4px_4px_0px_rgba(26,26,26,1)]">
+                  <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider">
+                    <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+                    <span>Ultimo caixa fechado registrado</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs font-black uppercase tracking-wide">
+                    <div className="bg-white/15 border-2 border-white/40 p-3">
+                      <span className="block text-white/80">Fechado em</span>
+                      <strong className="block mt-1">{formatFullDateTime(displaySession.closed_at).toUpperCase()}</strong>
+                    </div>
+                    <div className="bg-white/15 border-2 border-white/40 p-3">
+                      <span className="block text-white/80">Fechado por</span>
+                      <strong className="block mt-1">{String(displaySession.closed_by_name || 'Operador').toUpperCase()}</strong>
+                    </div>
+                    <div className="bg-white/15 border-2 border-white/40 p-3">
+                      <span className="block text-white/80">Contagem final</span>
+                      <strong className="block mt-1">{displaySession.closing_bread_quantity ?? 0} PAES</strong>
+                    </div>
+                  </div>
+                  {displaySession.notes && (
+                    <div className="bg-white text-brand-dark border-2 border-brand-dark p-3 text-xs font-black uppercase tracking-wide">
+                      <span className="block text-brand-orange mb-1">Anotacoes do fechamento</span>
+                      {displaySession.notes}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="bg-white border-4 border-brand-dark p-4 sm:p-5 flex flex-col sm:flex-row sm:justify-between items-start gap-4 text-xs font-black text-brand-dark shadow-[4px_4px_0px_rgba(26,26,26,1)]">
                 <div>
-                  <span className="block uppercase tracking-wide">Abertura: <strong className="text-brand-orange">{formatFullDateTime(currentSession.opened_at).toUpperCase()}</strong></span>
-                  <span className="block mt-2 uppercase tracking-wide">Por Operador: <strong className="text-brand-dark">{String(currentSession.opened_by_name || 'Felipe Admin').toUpperCase()}</strong></span>
+                  <span className="block uppercase tracking-wide">
+                    Abertura: <strong className="text-brand-orange">{formatFullDateTime(displaySession.opened_at).toUpperCase()}</strong>
+                  </span>
+                  <span className="block mt-2 uppercase tracking-wide">
+                    Por Operador: <strong className="text-brand-dark">{String(displaySession.opened_by_name || 'Operador').toUpperCase()}</strong>
+                  </span>
+                  {displaySession.closed_at && (
+                    <span className="block mt-2 uppercase tracking-wide">
+                      Fechamento: <strong className="text-brand-orange">{formatFullDateTime(displaySession.closed_at).toUpperCase()}</strong>
+                    </span>
+                  )}
                 </div>
                 <div className="text-left sm:text-right">
-                  <span className="block uppercase tracking-wide">Situação: <span className="bg-emerald-500 text-white border-2 border-brand-dark px-2.5 py-1 text-[10px] font-black uppercase tracking-wider">Aberto</span></span>
-                  <span className="block mt-2.5 uppercase tracking-wide font-mono">Turno: <strong className="text-brand-orange">Diário / Balcão</strong></span>
+                  <span className="block uppercase tracking-wide">
+                    Situacao:{' '}
+                    <span className={`${displaySession.status === 'closed' ? 'bg-rose-500' : 'bg-emerald-500'} text-white border-2 border-brand-dark px-2.5 py-1 text-[10px] font-black uppercase tracking-wider`}>
+                      {displaySession.status === 'closed' ? 'Fechado' : 'Aberto'}
+                    </span>
+                  </span>
+                  <span className="block mt-2.5 uppercase tracking-wide font-mono">
+                    Turno: <strong className="text-brand-orange">Diario / Balcao</strong>
+                  </span>
                 </div>
               </div>
             </div>
 
-            {/* Lado Direito - Auditoria e Salvar (Col 5) */}
             <div className={`lg:col-span-5 flex flex-col gap-6 ${user?.role === 'attendant' ? 'opacity-40 pointer-events-none' : ''}`}>
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-brand-orange stroke-[2.5]" />
-                <h2 className="text-base font-black text-brand-dark tracking-tight uppercase">Auditoria Física de Balcão</h2>
+                <h2 className="text-base font-black text-brand-dark tracking-tight uppercase">
+                  {isClosedSessionView ? 'Resultado da Auditoria' : 'Auditoria Fisica de Balcao'}
+                </h2>
               </div>
 
               <div className="bg-white border-4 border-brand-dark p-5 md:p-6 shadow-[5px_5px_0px_rgba(26,26,26,1)] flex flex-col gap-5">
-                
-                {/* Info sobre estoque estimado */}
                 <div className="bg-[#FEF3C7] border-3 border-brand-dark p-4 flex gap-3 text-xs leading-relaxed text-[#78350F] font-black shadow-[2px_2px_0px_rgba(26,26,26,1)] uppercase tracking-wide">
                   <Info className="w-4 h-4 text-brand-orange shrink-0 mt-0.5 stroke-[2.5]" />
                   <div>
-                    Estimativa do sistema: Restam cerca de <strong>{remainingEstimated} pães</strong> franceses no balcão de vendas. Conte fisicamente o mostrador e insira o valor real ao lado.
+                    Estimativa do sistema: restam cerca de <strong>{remainingEstimated} paes</strong> no balcao.
+                    {isClosedSessionView ? ' A contagem fisica registrada no fechamento aparece abaixo.' : ' Conte fisicamente o mostrador e insira o valor real.'}
                   </div>
                 </div>
 
-                <form onSubmit={handleCloseCashier} className="flex flex-col gap-5">
-                  
-                  {/* Entrada Física Contada */}
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-brand-dark text-xs font-black uppercase tracking-wider block">
-                      Pães Restantes Contados no Balcão
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      placeholder="Ex: 50 pães"
-                      value={actualBreadsCount}
-                      onChange={(e) => setActualBreadsCount(e.target.value)}
-                      required
-                      className="w-full bg-white border-3 border-brand-dark focus:border-brand-orange py-3 px-4 text-sm font-black outline-hidden text-brand-dark focus:ring-0 uppercase"
-                    />
-                  </div>
-
-                  {/* Comparativo de Inventário (Diferença) */}
-                  {inventoryDiff !== null && (
-                    <div className={`p-4 border-3 border-brand-dark flex items-center justify-between transition-all gap-4 text-xs font-black shadow-[2px_2px_0px_rgba(21,21,21,1)] uppercase tracking-wider ${
-                      inventoryDiff === 0
-                        ? 'bg-emerald-500 text-white'
-                        : inventoryDiff > 0
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-rose-500 text-white'
-                    }`}>
-                      <span className="flex items-center gap-1.5 leading-none">
-                        <ArrowRightLeft className="w-4 h-4 stroke-[2.5]" />
-                        Diferença Apurada:
-                      </span>
-                      <span className="text-sm font-black tracking-tight font-mono">
-                        {inventoryDiff === 0 && 'Carga exata! Sem sobras.'}
-                        {inventoryDiff > 0 && `Sobras de +${inventoryDiff} pães`}
-                        {inventoryDiff < 0 && `Quebra de ${inventoryDiff} pães`}
+                {isClosedSessionView ? (
+                  <div className="flex flex-col gap-5">
+                    <div className="border-3 border-brand-dark p-4 bg-white shadow-[2px_2px_0px_rgba(26,26,26,1)]">
+                      <span className="text-brand-dark/70 text-[10px] font-black uppercase tracking-wide block">Paes restantes contados</span>
+                      <span className="text-3xl font-black block mt-1.5 text-brand-dark font-mono uppercase">
+                        {displaySession.closing_bread_quantity ?? 0} PAES
                       </span>
                     </div>
-                  )}
 
-                  {/* Observações */}
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-brand-dark text-xs font-black uppercase tracking-wider block">
-                      Anotações de Fechamento / Turno
-                    </label>
-                    <textarea
-                      placeholder="Ex: Quebras normais de fabricação registradas. Fechado sem divergências financeiras."
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      rows={3}
-                      className="w-full bg-white border-3 border-brand-dark focus:border-brand-orange py-2 px-3.5 text-sm font-black outline-hidden text-brand-dark focus:ring-0"
-                    />
+                    {inventoryDiff !== null && (
+                      <div className={`p-4 border-3 border-brand-dark flex items-center justify-between transition-all gap-4 text-xs font-black shadow-[2px_2px_0px_rgba(21,21,21,1)] uppercase tracking-wider ${
+                        inventoryDiff === 0
+                          ? 'bg-emerald-500 text-white'
+                          : inventoryDiff > 0
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-rose-500 text-white'
+                      }`}>
+                        <span className="flex items-center gap-1.5 leading-none">
+                          <ArrowRightLeft className="w-4 h-4 stroke-[2.5]" />
+                          Diferenca Apurada:
+                        </span>
+                        <span className="text-sm font-black tracking-tight font-mono">{inventoryDiffLabel()}</span>
+                      </div>
+                    )}
                   </div>
+                ) : (
+                  <form onSubmit={handleCloseCashier} className="flex flex-col gap-5">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-brand-dark text-xs font-black uppercase tracking-wider block">
+                        Paes Restantes Contados no Balcao
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Ex: 50 paes"
+                        value={actualBreadsCount}
+                        onChange={(e) => setActualBreadsCount(e.target.value)}
+                        required
+                        className="w-full bg-white border-3 border-brand-dark focus:border-brand-orange py-3 px-4 text-sm font-black outline-hidden text-brand-dark focus:ring-0 uppercase"
+                      />
+                    </div>
 
-                  {/* Botão de Confirmação */}
-                  <div className="mt-2.5">
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="w-full py-4 text-center font-black text-white bg-rose-500 hover:bg-rose-600 border-4 border-brand-dark shadow-[4px_4px_0px_rgba(26,26,26,1)] active:shadow-none active:translate-y-1 transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide text-xs"
-                    >
-                      <Lock className="w-4 h-4 stroke-[2.5]" />
-                      {submitting ? 'Salvando Fechamento...' : 'FECHAR E ENCERRAR CAIXA DO DIA'}
-                    </button>
-                  </div>
+                    {inventoryDiff !== null && (
+                      <div className={`p-4 border-3 border-brand-dark flex items-center justify-between transition-all gap-4 text-xs font-black shadow-[2px_2px_0px_rgba(21,21,21,1)] uppercase tracking-wider ${
+                        inventoryDiff === 0
+                          ? 'bg-emerald-500 text-white'
+                          : inventoryDiff > 0
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-rose-500 text-white'
+                      }`}>
+                        <span className="flex items-center gap-1.5 leading-none">
+                          <ArrowRightLeft className="w-4 h-4 stroke-[2.5]" />
+                          Diferenca Apurada:
+                        </span>
+                        <span className="text-sm font-black tracking-tight font-mono">{inventoryDiffLabel()}</span>
+                      </div>
+                    )}
 
-                </form>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-brand-dark text-xs font-black uppercase tracking-wider block">
+                        Anotacoes de Fechamento / Turno
+                      </label>
+                      <textarea
+                        placeholder="Ex: Fechado sem divergencias financeiras."
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        rows={3}
+                        className="w-full bg-white border-3 border-brand-dark focus:border-brand-orange py-2 px-3.5 text-sm font-black outline-hidden text-brand-dark focus:ring-0"
+                      />
+                    </div>
 
+                    <div className="mt-2.5">
+                      <button
+                        type="submit"
+                        disabled={submitting}
+                        className="w-full py-4 text-center font-black text-white bg-rose-500 hover:bg-rose-600 border-4 border-brand-dark shadow-[4px_4px_0px_rgba(26,26,26,1)] active:shadow-none active:translate-y-1 transition-all cursor-pointer flex items-center justify-center gap-2 uppercase tracking-wide text-xs"
+                      >
+                        <Lock className="w-4 h-4 stroke-[2.5]" />
+                        {submitting ? 'Salvando Fechamento...' : 'FECHAR E ENCERRAR CAIXA DO DIA'}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
-              
-              {/* Rodapé segurança */}
+
               <div className="text-center font-mono text-[9px] font-black text-brand-dark/55 uppercase mt-3">
-                Auditoria registrada sob usuário <span className="text-brand-orange">{user?.name.toUpperCase()}</span> • Supervisor
+                Auditoria registrada sob usuario <span className="text-brand-orange">{user?.name.toUpperCase()}</span>
               </div>
-
             </div>
-
           </div>
         )}
       </div>
