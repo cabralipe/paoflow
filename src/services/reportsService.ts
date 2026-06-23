@@ -1,17 +1,9 @@
-import { isSupabaseConfigured } from '../lib/supabase';
-import { simulatedDb } from '../lib/simulatedDb';
 import { DailySummary, MostOrderedQuantity } from '../types';
 import { salesService } from './salesService';
 import { cashierService } from './cashierService';
 
 export const reportsService = {
   getDailySummary: async (sessionId: string): Promise<DailySummary> => {
-    if (!isSupabaseConfigured) {
-      return simulatedDb.getDailySummary(sessionId);
-    }
-
-    // Para maior resiliência caso a RPC no Supabase não esteja definida,
-    // nós mesmos calculamos os agregados no cliente a partir de todas as vendas!
     const sales = await salesService.getSalesBySession(sessionId);
     const session = await cashierService.getCurrentSession();
     const openingQuantity = session ? session.opening_bread_quantity : 0;
@@ -33,23 +25,23 @@ export const reportsService = {
     let total_card = 0;
     let total_credit = 0;
 
-    sales.forEach(s => {
-      if (s.status === 'paid') {
+    sales.forEach((sale) => {
+      if (sale.status === 'paid') {
         total_sales_paid++;
-        total_breads_paid += s.quantity;
-        total_value_paid += Number(s.total || 0);
+        total_breads_paid += sale.quantity;
+        total_value_paid += Number(sale.total || 0);
 
-        if (s.payment_method === 'pix') total_pix += Number(s.total || 0);
-        else if (s.payment_method === 'cash') total_cash += Number(s.total || 0);
-        else if (s.payment_method === 'card') total_card += Number(s.total || 0);
-        else if (s.payment_method === 'credit') total_credit += Number(s.total || 0);
-      } else if (s.status === 'waiting_payment') {
+        if (sale.payment_method === 'pix') total_pix += Number(sale.total || 0);
+        else if (sale.payment_method === 'cash') total_cash += Number(sale.total || 0);
+        else if (sale.payment_method === 'card') total_card += Number(sale.total || 0);
+        else if (sale.payment_method === 'credit') total_credit += Number(sale.total || 0);
+      } else if (sale.status === 'waiting_payment') {
         total_sales_pending++;
-        total_breads_pending += s.quantity;
-        total_value_pending += Number(s.total || 0);
-      } else if (s.status === 'cancelled') {
+        total_breads_pending += sale.quantity;
+        total_value_pending += Number(sale.total || 0);
+      } else if (sale.status === 'cancelled') {
         total_sales_cancelled++;
-        total_breads_cancelled += s.quantity;
+        total_breads_cancelled += sale.quantity;
       }
     });
 
@@ -70,31 +62,25 @@ export const reportsService = {
       total_cash,
       total_card,
       total_credit,
-      quantity_remaining_estimated
+      quantity_remaining_estimated,
     };
   },
 
   getMostOrderedQuantities: async (sessionId: string): Promise<MostOrderedQuantity[]> => {
-    if (!isSupabaseConfigured) {
-      return simulatedDb.getMostOrderedQuantities(sessionId);
-    }
-
     const sales = await salesService.getSalesBySession(sessionId);
-    const activeSales = sales.filter(s => s.status !== 'cancelled');
-    
+    const activeSales = sales.filter((sale) => sale.status !== 'cancelled');
+
     const countMap: Record<number, number> = {};
-    activeSales.forEach(s => {
-      countMap[s.quantity] = (countMap[s.quantity] || 0) + 1;
+    activeSales.forEach((sale) => {
+      countMap[sale.quantity] = (countMap[sale.quantity] || 0) + 1;
     });
 
-    const ordered = Object.entries(countMap)
-      .map(([qty, count]) => ({
-        quantity: Number(qty),
-        times_ordered: count
+    return Object.entries(countMap)
+      .map(([quantity, count]) => ({
+        quantity: Number(quantity),
+        times_ordered: count,
       }))
       .sort((a, b) => b.times_ordered - a.times_ordered)
       .slice(0, 6);
-
-    return ordered;
-  }
+  },
 };

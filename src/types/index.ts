@@ -1,15 +1,27 @@
-export type UserRole = 'attendant' | 'cashier' | 'admin';
+export type UserRole = 'attendant' | 'cashier' | 'admin' | 'superadmin';
+
+export interface Bakery {
+  id: string;
+  name: string;
+  slug: string;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface Profile {
   id: string;
+  bakery_id?: string | null;
   name: string;
   role: UserRole;
   active: boolean;
   created_at?: string;
+  bakery?: Pick<Bakery, 'name' | 'slug'> | null;
 }
 
 export interface BreadSettings {
   id: string;
+  bakery_id: string;
   bread_name: string;
   unit_price: number;
   quick_quantities: number[];
@@ -22,6 +34,7 @@ export type CashSessionStatus = 'open' | 'closed';
 
 export interface CashSession {
   id: string;
+  bakery_id: string;
   opened_by: string;
   closed_by?: string | null;
   opened_at: string;
@@ -41,6 +54,7 @@ export type SaleStatus = 'waiting_payment' | 'paid' | 'cancelled';
 
 export interface Sale {
   id: string;
+  bakery_id: string;
   sale_number: number;
   cash_session_id: string;
   attendant_id: string;

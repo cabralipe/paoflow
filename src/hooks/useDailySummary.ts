@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { authService } from '../services/authService';
 import { reportsService } from '../services/reportsService';
 import { DailySummary } from '../types';
 
@@ -19,8 +21,8 @@ export function useDailySummary(sessionId: string | undefined) {
       setSummary(data);
       setError(null);
     } catch (err: any) {
-      console.error('Erro ao buscar resumo diário:', err);
-      setError(err.message || 'Erro ao carregar resumo diário.');
+      console.error('Erro ao buscar resumo diario:', err);
+      setError(err.message || 'Erro ao carregar resumo diario.');
     } finally {
       setLoading(false);
     }
@@ -29,22 +31,35 @@ export function useDailySummary(sessionId: string | undefined) {
   useEffect(() => {
     fetchSummary();
 
-    if (!sessionId) return;
+    const bakeryId = authService.getCurrentUser()?.bakery_id;
+    if (!sessionId || !isSupabaseConfigured || !bakeryId) return;
 
-    // Atualiza automaticamente quando houver mudanças no banco ou nas vendas
-    const handleUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (
-        customEvent.detail?.key === 'pf_sales' ||
-        customEvent.detail?.key === 'pf_cash_sessions'
-      ) {
-        fetchSummary();
-      }
-    };
+    const channel = supabase
+      .channel(`summary-${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales',
+          filter: `cash_session_id=eq.${sessionId}`,
+        },
+        () => fetchSummary()
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cash_sessions',
+          filter: `bakery_id=eq.${bakeryId}`,
+        },
+        () => fetchSummary()
+      )
+      .subscribe();
 
-    window.addEventListener('paoflow_db_update', handleUpdate);
     return () => {
-      window.removeEventListener('paoflow_db_update', handleUpdate);
+      supabase.removeChannel(channel);
     };
   }, [sessionId, fetchSummary]);
 

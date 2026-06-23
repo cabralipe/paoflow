@@ -1,129 +1,142 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { simulatedDb } from '../lib/simulatedDb';
-import { Profile, UserRole } from '../types';
+import { Bakery, Profile, UserRole } from '../types';
+
+interface CreateProfileInput {
+  email: string;
+  password: string;
+  name: string;
+  role: Exclude<UserRole, 'superadmin'>;
+  bakery_id: string;
+}
+
+const ensureSupabase = () => {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase nao configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
+  }
+};
+
+const storeCurrentUser = (profile: Profile | null) => {
+  if (profile) {
+    localStorage.setItem('pf_current_user', JSON.stringify(profile));
+  } else {
+    localStorage.removeItem('pf_current_user');
+  }
+  window.dispatchEvent(new CustomEvent('auth_state_change', { detail: { user: profile } }));
+};
 
 export const authService = {
-  // Obter usuário atual logado de forma síncrona/rápida para o frontend
   getCurrentUser: (): Profile | null => {
-    if (!isSupabaseConfigured) {
-      const saved = localStorage.getItem('pf_current_user');
-      return saved ? JSON.parse(saved) : null;
-    }
-    
-    // Para Supabase: tentamos ler do LocalStorage temporário ou sessão ativa
     const saved = localStorage.getItem('pf_current_user');
     return saved ? JSON.parse(saved) : null;
   },
 
-  // Retorna a lista de perfis mock/disponíveis no ambiente para facilitação de testes
-  getAvailableUserProfiles: (): Profile[] => {
-    return simulatedDb.getProfiles();
-  },
-
-  // Login de simulação rápido
-  loginSimulated: (profileId: string): Profile => {
-    const profiles = simulatedDb.getProfiles();
-    const user = profiles.find(p => p.id === profileId);
-    if (!user) throw new Error('Usuário de simulação não encontrado.');
-    localStorage.setItem('pf_current_user', JSON.stringify(user));
-    window.dispatchEvent(new CustomEvent('auth_state_change', { detail: { user } }));
-    return user;
-  },
-
-  // Login real (Supabase Auth)
   login: async (email: string, password: string): Promise<Profile> => {
-    if (!isSupabaseConfigured) {
-      // Se não houver Supabase, faz login automático baseado no email
-      const profiles = simulatedDb.getProfiles();
-      let matchedUser = profiles.find(p => email.toLowerCase().includes(p.name.split(' ')[0].toLowerCase()));
-      
-      if (!matchedUser) {
-        if (email.includes('admin') || email.includes('felipe')) {
-          matchedUser = profiles.find(p => p.role === 'admin');
-        } else if (email.includes('caixa') || email.includes('beatriz')) {
-          matchedUser = profiles.find(p => p.role === 'cashier');
-        } else {
-          matchedUser = profiles.find(p => p.role === 'attendant');
-        }
-      }
+    ensureSupabase();
 
-      if (!matchedUser) {
-        matchedUser = profiles[0]; // Ana Silva
-      }
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-      localStorage.setItem('pf_current_user', JSON.stringify(matchedUser));
-      window.dispatchEvent(new CustomEvent('auth_state_change', { detail: { user: matchedUser } }));
-      return matchedUser;
+    if (error) throw error;
+    if (!data.user) throw new Error('Sem resposta valida do usuario do login.');
+
+    const { data: profile, error: profileErr } = await supabase
+      .from('profiles')
+      .select('*, bakery:bakeries(name, slug)')
+      .eq('id', data.user.id)
+      .single();
+
+    if (profileErr) {
+      await supabase.auth.signOut();
+      throw new Error('Login autenticado, mas o perfil operacional nao foi encontrado.');
     }
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) throw error;
-      if (!data.user) throw new Error('Sem resposta válida do usuário do login');
-
-      // Buscar perfil complementar do usuário autenticado nas tabelas public.profiles
-      const { data: profile, error: profileErr } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
-        .single();
-
-      if (profileErr) {
-        // Se falhar, cria um provisório baseado na regra
-        const placeholderProfile: Profile = {
-          id: data.user.id,
-          name: email.split('@')[0],
-          role: email.includes('admin') ? 'admin' : (email.includes('caixa') ? 'cashier' : 'attendant'),
-          active: true
-        };
-        localStorage.setItem('pf_current_user', JSON.stringify(placeholderProfile));
-        return placeholderProfile;
-      }
-
-      localStorage.setItem('pf_current_user', JSON.stringify(profile));
-      window.dispatchEvent(new CustomEvent('auth_state_change', { detail: { user: profile } }));
-      return profile;
-    } catch (err: any) {
-      console.error('Erro de login no Supabase:', err.message);
-      throw err;
+    if (!profile.active) {
+      await supabase.auth.signOut();
+      throw new Error('Usuario inativo. Procure o administrador da padaria.');
     }
+
+    if (profile.role !== 'superadmin' && !profile.bakery_id) {
+      await supabase.auth.signOut();
+      throw new Error('Usuario sem padaria vinculada. Procure o superadmin.');
+    }
+
+    storeCurrentUser(profile);
+    return profile;
   },
 
   logout: async (): Promise<void> => {
-    localStorage.removeItem('pf_current_user');
-    window.dispatchEvent(new CustomEvent('auth_state_change', { detail: { user: null } }));
+    storeCurrentUser(null);
     if (isSupabaseConfigured) {
       await supabase.auth.signOut();
     }
   },
 
-  // Administradores gerenciam outros perfis de funcionários
-  getProfiles: async (): Promise<Profile[]> => {
-    if (!isSupabaseConfigured) {
-      return simulatedDb.getProfiles();
+  refreshCurrentProfile: async (): Promise<Profile | null> => {
+    ensureSupabase();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData.session?.user.id;
+    if (!userId) {
+      storeCurrentUser(null);
+      return null;
     }
+
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('*, bakery:bakeries(name, slug)')
+      .eq('id', userId)
+      .single();
+
+    if (error || !profile?.active) {
+      storeCurrentUser(null);
+      return null;
+    }
+
+    storeCurrentUser(profile);
+    return profile;
+  },
+
+  getProfiles: async (): Promise<Profile[]> => {
+    ensureSupabase();
     const { data: profiles, error } = await supabase
       .from('profiles')
-      .select('*')
+      .select('*, bakery:bakeries(name, slug)')
       .order('name');
     if (error) throw error;
     return profiles;
   },
 
+  createProfile: async (profile: CreateProfileInput): Promise<Profile> => {
+    ensureSupabase();
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: profile,
+    });
+
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+    return data.profile;
+  },
+
   saveProfile: async (profile: Profile): Promise<Profile> => {
-    if (!isSupabaseConfigured) {
-      return simulatedDb.saveProfile(profile);
-    }
+    ensureSupabase();
     const { data, error } = await supabase
       .from('profiles')
       .upsert(profile)
-      .select()
+      .select('*, bakery:bakeries(name, slug)')
       .single();
     if (error) throw error;
     return data;
-  }
+  },
+
+  getBakeriesForCurrentUser: async (): Promise<Bakery[]> => {
+    ensureSupabase();
+    const { data, error } = await supabase
+      .from('bakeries')
+      .select('*')
+      .eq('active', true)
+      .order('name');
+    if (error) throw error;
+    return data;
+  },
 };

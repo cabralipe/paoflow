@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { authService } from '../services/authService';
 import { cashierService } from '../services/cashierService';
 import { CashSession } from '../types';
 
@@ -14,8 +16,8 @@ export function useCurrentCashSession() {
       setCurrentSession(session);
       setError(null);
     } catch (err: any) {
-      console.error('Erro ao buscar sessão em useCurrentCashSession:', err);
-      setError(err.message || 'Erro ao carregar sessão de caixa.');
+      console.error('Erro ao buscar sessao em useCurrentCashSession:', err);
+      setError(err.message || 'Erro ao carregar sessao de caixa.');
     } finally {
       setLoading(false);
     }
@@ -24,17 +26,27 @@ export function useCurrentCashSession() {
   useEffect(() => {
     fetchSession();
 
-    // Ouvi atualizações nos dados de caixa
-    const handleUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.key === 'pf_cash_sessions' || customEvent.detail?.key === 'pf_sales') {
-        fetchSession();
-      }
-    };
+    const bakeryId = authService.getCurrentUser()?.bakery_id;
+    if (!isSupabaseConfigured || !bakeryId) return;
 
-    window.addEventListener('paoflow_db_update', handleUpdate);
+    const channel = supabase
+      .channel(`cash-session-${bakeryId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'cash_sessions',
+          filter: `bakery_id=eq.${bakeryId}`,
+        },
+        () => {
+          fetchSession();
+        }
+      )
+      .subscribe();
+
     return () => {
-      window.removeEventListener('paoflow_db_update', handleUpdate);
+      supabase.removeChannel(channel);
     };
   }, []);
 

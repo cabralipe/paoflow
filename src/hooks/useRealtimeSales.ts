@@ -30,44 +30,27 @@ export function useRealtimeSales(sessionId: string | undefined) {
   useEffect(() => {
     fetchSales();
 
-    if (!sessionId) return;
+    if (!sessionId || !isSupabaseConfigured) return;
 
-    if (isSupabaseConfigured) {
-      // Configuração de real-time do Supabase para escutar inserções e atualizações na tabela sales
-      const channel = supabase
-        .channel(`realtime-sales-sess-${sessionId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'sales',
-            filter: `cash_session_id=eq.${sessionId}`
-          },
-          () => {
-            // Recarrega as vendas para garantir que os dados complementares de join (como perfis de atendentes) venham corretos
-            fetchSales();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    } else {
-      // Para o modo de simulação, ouvimos eventos customizados do LocalStorage
-      const handleSimulatedUpdate = (e: Event) => {
-        const customEvent = e as CustomEvent;
-        if (customEvent.detail?.key === 'pf_sales') {
+    const channel = supabase
+      .channel(`realtime-sales-sess-${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales',
+          filter: `cash_session_id=eq.${sessionId}`,
+        },
+        () => {
           fetchSales();
         }
-      };
+      )
+      .subscribe();
 
-      window.addEventListener('paoflow_db_update', handleSimulatedUpdate);
-      return () => {
-        window.removeEventListener('paoflow_db_update', handleSimulatedUpdate);
-      };
-    }
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [sessionId]);
 
   return { sales, loading, error, refetch: fetchSales };

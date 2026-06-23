@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { reportsService } from '../services/reportsService';
 import { MostOrderedQuantity } from '../types';
 
@@ -16,7 +17,7 @@ export function useMostOrderedQuantities(sessionId: string | undefined) {
     try {
       setLoading(true);
       const data = await reportsService.getMostOrderedQuantities(sessionId);
-      setSalesMostOrdered(data);
+      setMostOrdered(data);
       setError(null);
     } catch (err: any) {
       console.error('Erro ao buscar quantidades mais vendidas:', err);
@@ -26,36 +27,27 @@ export function useMostOrderedQuantities(sessionId: string | undefined) {
     }
   }, [sessionId]);
 
-  // Função auxiliar de fallback para evitar que erros de TypeScript de nomes truncados aconteçam
-  const setSalesMostOrdered = (data: MostOrderedQuantity[]) => {
-    // Garanta valores padrão se vazios
-    if (data.length === 0) {
-      setMostOrdered([
-        { quantity: 5, times_ordered: 1 },
-        { quantity: 10, times_ordered: 1 },
-        { quantity: 12, times_ordered: 1 },
-        { quantity: 20, times_ordered: 1 }
-      ]);
-    } else {
-      setMostOrdered(data);
-    }
-  };
-
   useEffect(() => {
     fetchMostOrdered();
 
-    if (!sessionId) return;
+    if (!sessionId || !isSupabaseConfigured) return;
 
-    const handleUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent;
-      if (customEvent.detail?.key === 'pf_sales') {
-        fetchMostOrdered();
-      }
-    };
+    const channel = supabase
+      .channel(`most-ordered-${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales',
+          filter: `cash_session_id=eq.${sessionId}`,
+        },
+        () => fetchMostOrdered()
+      )
+      .subscribe();
 
-    window.addEventListener('paoflow_db_update', handleUpdate);
     return () => {
-      window.removeEventListener('paoflow_db_update', handleUpdate);
+      supabase.removeChannel(channel);
     };
   }, [sessionId, fetchMostOrdered]);
 
