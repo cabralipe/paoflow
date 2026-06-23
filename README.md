@@ -1,20 +1,19 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# PãoFlow
 
-# Run and deploy your AI Studio app
+Sistema web em nuvem para padaria, focado no registro rápido de vendas de pão francês com fila do caixa em tempo real. Frontend em React + Vite + TypeScript, backend em Supabase (Postgres + Auth + Realtime + Edge Functions).
 
-This contains everything you need to run your app locally.
+## Rodar localmente
 
-View your app in AI Studio: https://ai.studio/apps/b85cce41-79dc-44fb-97cc-0e3809d0b797
+Pré-requisitos: Node.js 18+.
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Instale as dependências:
+   ```bash
+   npm install
+   ```
+2. Crie um arquivo `.env.local` na raiz (baseado em `.env.example`):
+   ```bash
+   VITE_SUPABASE_URL="https://SEU-PROJETO.supabase.co"
+   VITE_SUPABASE_ANON_KEY="sua-chave-anon"
+   ```
+3. Rode o app:
+   ```b
