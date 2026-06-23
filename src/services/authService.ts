@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, supabaseConfigError } from '../lib/supabase';
 import { Bakery, Profile, UserRole } from '../types';
 
 interface CreateProfileInput {
@@ -11,7 +11,7 @@ interface CreateProfileInput {
 
 const ensureSupabase = () => {
   if (!isSupabaseConfigured) {
-    throw new Error('Supabase nao configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
+    throw new Error(supabaseConfigError || 'Supabase nao configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.');
   }
 };
 
