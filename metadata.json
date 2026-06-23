@@ -1,0 +1,6 @@
+{
+  "name": "PãoFlow",
+  "description": "Sistema web em nuvem para padaria, focado no registro rápido de vendas de pão francês com fila do caixa em tempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
